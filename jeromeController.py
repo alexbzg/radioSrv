@@ -153,7 +153,7 @@ class Controller:
         self.checkLineMode( line )
 
     def checkLineMode( self, line ):
-        if self.linesModes.has_key( line ) and \
+        if line in self.linesModes and \
             len( self.linesDirs ) > line:
             if self.linesModes[ line ] == 'in':
                 if self.linesDirs[ line ] == '0':
@@ -247,6 +247,7 @@ class Controller:
         self.setConnectedCallbacks = []
         self.pingTimer = None
         self.UARTconnection = None
+        self.UARTenableRepeat = False
         self.UARTcache = []
         self.UARTtimer = None
         self.__connected = False
@@ -254,6 +255,7 @@ class Controller:
            self.name = params[ 'name' ]
         self.host = params[ 'host' ]
         self.UART = params[ 'UART' ]
+        self.UARTdataCallbacks = []
         self.connect()
 
     def UARTconnect( self ):
@@ -271,10 +273,11 @@ class Controller:
                     logging.error( 'Error connecting to Jerome UART ' + self.host )
                 else:
                     break
-        if self.loop.is_running:
-            asyncio.async( _connect() )
-        else:
-            self.loop.run_until_complete( _connect() )
+        if self.UART:
+            if self.loop.is_running:
+                asyncio.async( _connect() )
+            else:
+                self.loop.run_until_complete( _connect() )
 
     def UARTconnectionMade( self ):
         self.setUARTtimer()
@@ -284,9 +287,8 @@ class Controller:
     def UARTsend( self, data ):
         if self.UARTconnection:
             self.UARTcache = data
-
-            for d in data:
-                self.UARTconnection.transport.write( chr( d ) )
+            logging.error( 'UART send: ' + str( data ) )
+            self.UARTconnection.transport.write( data )
             if self.UARTtimer and self.UARTtimer.active():
                 self.UARTtimer.cancel()
             self.setUARTtimer()
@@ -298,7 +300,7 @@ class Controller:
 
 
     def UARTrepeat( self ):
-        if self.UARTconnection:
+        if self.UARTconnection and self.UARTenableRepeat:
             for d in self.UARTcache:
                 self.UARTconnection.transport.write( chr( d ) )
             self.setUARTtimer()
@@ -313,7 +315,11 @@ class Controller:
             self.UARTconnect()
 
     def UARTdataReceived( self, data ):
-        logging.error( data )
+        data = data.replace( b'\x00', b'' )
+        if data:
+#            logging.error( 'UART ' + str( data ) )
+            for cb in self.UARTdataCallbacks:
+                cb( data )
        
 
     def getConnected( self ):
@@ -332,13 +338,5 @@ class Controller:
 
     connected = property( getConnected, setConnected )
 
-    def buildProtocol( self, addr ):
-        self.protocol = ControllerProtocol()
-        self.protocol.factory = self
-        return self.protocol
-
-    def startedConnecting(self, connector):
-        logging.info( 'Started to connect ' + 
-                connector.getDestination().host )
 
 
