@@ -5,9 +5,31 @@ import asyncio, logging
 from aiohttp import web
 from jeromeController import Controller
 
-@asyncio.coroutine
-def testHandler(request):
+wsConnections = []
+
+async def testHandler(request):
     return web.Response( text = "OK" )
+
+async def wsHandler(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    logging.error( 'socket connected' )
+
+    wsConnections.append( ws )
+    for enc in encoders:
+        await ws.send_json( { enc: encData[enc]['val'] } )
+
+    async for msg in ws:
+        if msg.type == aiohttp.WSMsgType.TEXT:
+            if msg.data == 'close':
+                await ws.close()
+        elif msg.type == aiohttp.WSMsgType.ERROR:
+            logging.error('ws connection closed with exception %s' %
+                  ws.exception())
+
+    wsConnections.remove( ws )
+    return ws
 
 trLine = 13
 trDelay = 0.02
@@ -18,7 +40,7 @@ curEncoder = 0
 for enc in encoders:
     encData[enc] = { 'lo': -1, 'hi': -1, 'grey': -1, 'val': -1 }
 
-def UARTdataReceived(data):
+async def UARTdataReceived(data):
     ed = encData[encoders[curEncoder]]
     for byte in data:
         if byte >= 128:
@@ -33,6 +55,8 @@ def UARTdataReceived(data):
             ed['val'] = ed['val'] ^ mask
             mask = mask >> 1
         logging.error( str( encoders[curEncoder] ) + ': ' + str(ed['val']) )
+        for ws in wsConnections:
+            await ws.send_json( { encoders[curEncoder]: ed['val'] } )
 
 def controllerConnected( state ):
     if state:
@@ -59,6 +83,7 @@ def queryEncoders():
 
 webApp = web.Application()
 webApp.router.add_route('GET', '/aiohttp/test', testHandler )
+webApp.router.add_route('GET', '/aiohttp/ws', wsHandler )
 
 loop = asyncio.get_event_loop()
 handler = webApp.make_handler()

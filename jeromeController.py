@@ -27,7 +27,7 @@ class ControllerProtocol( asyncio.Protocol ):
                 self.rcvBuf = ''
 
     def lineReceived(self, data):        
-        logging.error( 'Recv: ' + data )
+        #logging.error( 'Recv: ' + data )
         data = data.replace( '#', '' ).replace( '\r\n', '' )
         logging.info( self.factory.host + ' ' + data )
         if self.pingTimer:
@@ -83,7 +83,7 @@ class ControllerProtocol( asyncio.Protocol ):
         #self.factory = None
 
     def sendCmd( self, cmd ):
-        logging.error( self.factory.host + ' ' + cmd )
+        #logging.error( self.factory.host + ' ' + cmd )
         fullCmd = cmd
         if cmd != '':
             fullCmd = "," + fullCmd
@@ -287,7 +287,7 @@ class Controller:
     def UARTsend( self, data ):
         if self.UARTconnection:
             self.UARTcache = data
-            logging.error( 'UART send: ' + str( data ) )
+#            logging.error( 'UART send: ' + str( data ) )
             self.UARTconnection.transport.write( data )
             if self.UARTtimer and self.UARTtimer.active():
                 self.UARTtimer.cancel()
@@ -319,7 +319,7 @@ class Controller:
         if data:
 #            logging.error( 'UART ' + str( data ) )
             for cb in self.UARTdataCallbacks:
-                cb( data )
+                asyncio.ensure_future( cb( data ) )
        
 
     def getConnected( self ):
