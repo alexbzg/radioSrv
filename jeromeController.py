@@ -27,9 +27,8 @@ class ControllerProtocol( asyncio.Protocol ):
                 self.rcvBuf = ''
 
     def lineReceived(self, data):        
-        #logging.error( 'Recv: ' + data )
         data = data.replace( '#', '' ).replace( '\r\n', '' )
-        logging.info( self.factory.host + ' ' + data )
+        #logging.info( self.factory.host + ' ' + data )
         if self.pingTimer:
             self.pingTimer.cancel()
             self.pingTimer = None;
@@ -112,7 +111,7 @@ class UARTProtocol( asyncio.Protocol ):
     def connection_lost( self, reason ):
         logging.error( self.controller.host + \
                 ' UART connection lost or failed ' + \
-                reason.getErrorMessage() )
+                str( reason ) )
         self.controller.UARTconnectionLost()
 
     def connection_made(self, transport):
@@ -213,7 +212,7 @@ class Controller:
     def saveLineState( self, line, state ):
         if self.linesStates[ line ] != ( state == '1' ):
             self.linesStates[ line ] = ( state == '1' )
-            logging.info( "line " + str( line ) + ": " + str( state ) )
+            #logging.info( "line " + str( line ) + ": " + str( state ) )
             if self.callbacks.get( line ):
                 for callback in self.callbacks[ line ]:
                     callback( self.linesStates[ line ] )
@@ -287,7 +286,7 @@ class Controller:
     def UARTsend( self, data ):
         if self.UARTconnection:
             self.UARTcache = data
-#            logging.error( 'UART send: ' + str( data ) )
+            logging.debug( 'UART send: ' + str( data ) )
             self.UARTconnection.transport.write( data )
             if self.UARTtimer and self.UARTtimer.active():
                 self.UARTtimer.cancel()
@@ -307,7 +306,7 @@ class Controller:
 
     def UARTconnectionLost( self ):
         if self.UARTconnection:
-            self.UARTconnection.transport.loseConnection()
+            self.UARTconnection.transport.close()
             self.UARTconnection = None
         if self.UARTtimer and self.UARTtimer.active():
             self.UARTtimer.cancel()
@@ -317,9 +316,9 @@ class Controller:
     def UARTdataReceived( self, data ):
         data = data.replace( b'\x00', b'' )
         if data:
-#            logging.error( 'UART ' + str( data ) )
+            logging.debug( 'UART ' + str( data ) )
             for cb in self.UARTdataCallbacks:
-                asyncio.ensure_future( cb( data ) )
+                cb( data )
        
 
     def getConnected( self ):
@@ -327,8 +326,8 @@ class Controller:
 
     def setConnected( self, val ):
         self.__connected = val
-        for entry in self.setConnectedCallbacks:
-            entry( val )
+        for cb in self.setConnectedCallbacks:
+            cb( val )
         if not val and self.UARTconnection:
             logging.error( "Controller " + self.host + \
                     ' UART disconnected' )
