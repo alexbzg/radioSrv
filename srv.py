@@ -78,12 +78,22 @@ async def wsPing():
                 wsConnections.remove( ws )
         await asyncio.sleep( 10 )
 
+encodersSettings = loadJSON( conf.get( 'web', 'root' ) + '/encoders.json' )
 
-encoders = [ 1, 2 ]
+encoders = []
 encData = {}
 curEncoder = 0
-for enc in encoders:
-    encData[enc] = { 'lo': -1, 'hi': -1, 'grey': -1, 'val': -1 }
+
+def initEncData():
+    global encoders, encData
+    encoders = []
+    encData = {}
+    for enc in encodersSettings:
+        encID = enc['id']
+        encoders.append( encID )
+        encData[encID] = { 'lo': -1, 'hi': -1, 'grey': -1, 'val': -1 }
+
+initEncData()
 encoderTimeoutTask = None
 
 def UARTdataReceived(data):
@@ -96,7 +106,7 @@ def UARTdataReceived(data):
         else:
             ed['lo'] = byte - 64
     if ed['lo'] != -1 and ed['hi'] != -1:
-        if ed['grey'] != ed['lo'] + ed['hi']:
+        if ed['grey'] != ed['lo'] + ed['hi'] or ed['val'] == -1:
             ed['grey'] = ed['lo'] + ed['hi']
             val = ed['grey']
             mask = val >> 1
