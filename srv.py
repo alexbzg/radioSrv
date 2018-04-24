@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 #coding=utf-8
 
-import asyncio, logging
+import asyncio, logging, json
 from aiohttp import web
 from jeromeController import Controller
 
@@ -45,6 +45,22 @@ async def wsHandler(request):
 
     wsConnections.remove( ws )
     return ws
+
+async def encSettingsHandler( request ):
+    global encodersSettings
+    data = await request.json()
+    data['id'] = int( data['id'] )
+    encodersSettings = [ x for x in encodersSettings if x['id'] != data['id'] ]
+    if not 'delete' in data:
+        encodersSettings.append( data )
+    sorted( encodersSettings, key = lambda x: x['id'] )
+    with open( conf.get( 'web', 'root' ) + '/encoders.json', 'w' ) as f:
+        json.dump( encodersSettings, f, ensure_ascii = False )
+    await wsUpdate( { 'updateSettings': 1 } )
+    initEncData()
+    curEncoder = 0
+    return web.Response( text = 'OK' )
+
 
 def setEncoderValue( enc, val ):
     encData[enc]['val'] = val
@@ -159,6 +175,7 @@ def queryEncoders():
 webApp = web.Application()
 webApp.router.add_route('GET', '/aiohttp/test', testHandler )
 webApp.router.add_route('GET', '/aiohttp/ws/encoders', wsHandler )
+webApp.router.add_route('POST', '/aiohttp/encSettings', encSettingsHandler )
 
 loop = asyncio.get_event_loop()
 handler = webApp.make_handler()
