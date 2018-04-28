@@ -250,6 +250,7 @@ class Controller:
         self.UARTcache = []
         self.UARTtimer = None
         self.__connected = False
+        self.closing = False
         if 'name' in params:
            self.name = params[ 'name' ]
         self.host = params[ 'host' ]
@@ -332,10 +333,15 @@ class Controller:
             logging.error( "Controller " + self.host + \
                     ' UART disconnected' )
             self.UARTconnectionLost()
-        if not val:
+        if not val and not self.closing:
             self.connect()
 
     connected = property( getConnected, setConnected )
 
-
+    def close(self):
+        logging.error( "Controller " + self.host + \
+            " disconnect requested" )
+        self.closing = True
+        if self.connected:
+            self.protocol.transport.close()
 

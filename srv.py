@@ -20,10 +20,6 @@ trLine = conf.getint( 'encoders', 'trLine' )
 trDelay = conf.getfloat( 'encoders', 'trDelay' )
 answerTimeout = conf.getfloat( 'encoders', 'answerTimeout' )
 
-
-async def testHandler(request):
-    return web.Response( text = "OK" )
-
 async def wsHandler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
@@ -49,16 +45,24 @@ async def wsHandler(request):
 async def encSettingsHandler( request ):
     global encodersSettings
     data = await request.json()
-    data['id'] = int( data['id'] )
-    encodersSettings = [ x for x in encodersSettings if x['id'] != data['id'] ]
-    if not 'delete' in data:
-        encodersSettings.append( data )
-    sorted( encodersSettings, key = lambda x: x['id'] )
+    if 'controller' in data:
+        encodersSettings['controller'] = data['controller']
+        if data['controller']['host'] != controller.host:
+            controller.close()
+            startController()
+    else:
+        data['id'] = int( data['id'] )
+        encodersSettings['encoders'] = [ x for x in encodersSettings if x['id'] != data['id'] ]
+        if not 'delete' in data:
+            encodersSettings.append( data )
+        sorted( encodersSettings['encoders'], key = lambda x: x['id'] )
+        initEncData()
     with open( conf.get( 'web', 'root' ) + '/encoders.json', 'w' ) as f:
         json.dump( encodersSettings, f, ensure_ascii = False )
     await wsUpdate( { 'updateSettings': 1 } )
-    initEncData()
     curEncoder = 0
+    for (k,v) in request.headers.items():
+        logging.warning( k + ': ' + v )
     return web.Response( text = 'OK' )
 
 
@@ -104,7 +108,7 @@ def initEncData():
     global encoders, encData
     encoders = []
     encData = {}
-    for enc in encodersSettings:
+    for enc in encodersSettings['encoders']:
         encID = enc['id']
         encoders.append( encID )
         encData[encID] = { 'lo': -1, 'hi': -1, 'grey': -1, 'val': -1 }
@@ -173,25 +177,38 @@ def queryEncoders():
     loop.call_later( trDelay, sendQuery )
 
 webApp = web.Application()
-webApp.router.add_route('GET', '/aiohttp/test', testHandler )
-webApp.router.add_route('GET', '/aiohttp/ws/encoders', wsHandler )
-webApp.router.add_route('POST', '/aiohttp/encSettings', encSettingsHandler )
+webApp.router.add_get('/aiohttp/ws/encoders', wsHandler )
+webApp.router.add_post('/aiohttp/encSettings', encSettingsHandler )
 
 loop = asyncio.get_event_loop()
 handler = webApp.make_handler()
-f = loop.create_unix_server(handler, conf.get( 'web', 'socket' ) )
-webSrv = loop.run_until_complete(f)
+webServers = []
+if 'socket' in conf['web']:
+    fs = loop.create_unix_server(handler, conf.get( 'web', 'socket' ) )
+    loop.run_until_complete(fs)
+    logging.error( 'listening to ' + conf['web']['socket'] )
+if 'port' in conf['web']:
+    fp = loop.create_server(handler, port = conf['web']['port'] )
+    webSrv = loop.run_until_complete(fp)
+    logging.error( 'listening to ' + conf['web']['port'] )
+
 
 wsPingTask = asyncio.ensure_future( wsPing() )
-#loop.run_until_complete( wsPingTask )
 
-controller = Controller( loop, { 'host': conf.get( 'encoders', 'ip' ), 'UART': True } )
-controller.setConnectedCallbacks.append( controllerConnected )
-controller.setLineMode( trLine, 'out' )
-controller.UARTdataCallbacks.append( UARTdataReceived )
+controller = None
 
+def startController():
+    global controller
+    controller = Controller( loop, 
+            { 'host': encodersSettings['controller']['host'], 'UART': True } )
+    controller.setConnectedCallbacks.append( controllerConnected )
+    controller.setLineMode( trLine, 'out' )
+    controller.UARTdataCallbacks.append( UARTdataReceived )
+
+startController()
 
 try:
+    logging.error( 'loop start' )
     loop.run_forever()
 except KeyboardInterrupt:
     pass
@@ -202,7 +219,8 @@ else:
 finally:
 #    loop.run_until_complete(handler.finish_connections(1.0))
     wsPingTask.cancel()
-    webSrv.close()
-    loop.run_until_complete(webSrv.wait_closed())
+    for webSrv in webServers:
+        webSrv.close()
+        loop.run_until_complete(webSrv.wait_closed())
     loop.run_until_complete(webApp.finish())
 loop.close()
