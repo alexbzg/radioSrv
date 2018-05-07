@@ -21,7 +21,7 @@ trDelay = conf.getfloat( 'encoders', 'trDelay' )
 answerTimeout = conf.getfloat( 'encoders', 'answerTimeout' )
 
 async def wsHandler(request):
-    ws = web.WebSocketResponse()
+    ws = web.WebSocketResponse( heartbeat = 0.5 )
     await ws.prepare(request)
 
     logging.error( 'socket connected' )
@@ -35,11 +35,13 @@ async def wsHandler(request):
         if msg.type == aiohttp.WSMsgType.TEXT:
             if msg.data == 'close':
                 await ws.close()
+            if msg.data == 'ping':
+                await ws.send_str( 'pong' )
         elif msg.type == aiohttp.WSMsgType.ERROR:
             logging.error('ws connection closed with exception %s' %
                   ws.exception())
 
-    wsConnections.remove( ws )
+    wsRemove( ws )
     return ws
 
 async def encSettingsHandler( request ):
@@ -52,9 +54,9 @@ async def encSettingsHandler( request ):
             startController()
     else:
         data['id'] = int( data['id'] )
-        encodersSettings['encoders'] = [ x for x in encodersSettings if x['id'] != data['id'] ]
+        encodersSettings['encoders'] = [ x for x in encodersSettings['encoders'] if x['id'] != data['id'] ]
         if not 'delete' in data:
-            encodersSettings.append( data )
+            encodersSettings['encoders'].append( data )
         sorted( encodersSettings['encoders'], key = lambda x: x['id'] )
         initEncData()
     with open( conf.get( 'web', 'root' ) + '/encoders.json', 'w' ) as f:
@@ -67,42 +69,40 @@ async def encSettingsHandler( request ):
 
 
 def setEncoderValue( enc, val ):
-    encData[enc]['val'] = val
+    ed = encData[enc]
+    ed['val'] = val
+    ed['lo'] = -1
+    ed['hi'] = -1
+    if val != -1:
+        ed['updated'] = True
     asyncio.ensure_future( wsUpdate( { 'encoders': { enc: val } } ) )
 
 async def wsSend( ws, data ):
-    try:
-        await ws.send_json( data )
-        if ws.exception():
-            logging.error( str( ws.exception() ) )
-            wsConnections.remove( ws )
-    except:
-        logging.exception( 'ws send error' )
+    if ws.closed:
+        wsRemove( ws )
+    else:
+        try:
+            await ws.send_json( data )
+            if ws.exception():
+                logging.error( str( ws.exception() ) )
+                wsConnections.remove( ws )
+        except:
+            logging.exception( 'ws send error' )
+            wsRemove( ws )
+
+def wsRemove( ws ):
+    if ws in wsConnections:
         wsConnections.remove( ws )
 
 async def wsUpdate( data ):
     for ws in wsConnections:
         await wsSend( ws, data ) 
 
-async def wsPing():
-    logging.debug( 'ping started' )
-    while True:
-        for ws in wsConnections:
-            try:
-                await ws.ping()
-                if ws.exception():
-                    logging.error( str( ws.exception() ) )
-                    wsConnections.remove( ws )
-            except:
-                logging.exception( 'ws send error' )
-                wsConnections.remove( ws )
-        await asyncio.sleep( 10 )
-
 encodersSettings = loadJSON( conf.get( 'web', 'root' ) + '/encoders.json' )
 
 encoders = []
 encData = {}
-curEncoder = 0
+curEncoder = -1
 
 def initEncData():
     global encoders, encData
@@ -111,21 +111,27 @@ def initEncData():
     for enc in encodersSettings['encoders']:
         encID = enc['id']
         encoders.append( encID )
-        encData[encID] = { 'lo': -1, 'hi': -1, 'grey': -1, 'val': -1 }
+        encData[encID] = { 'lo': -1, 'hi': -1, 'grey': -1, 'val': -1, 
+                'updated': False }
 
 initEncData()
 encoderTimeoutTask = None
 
 def UARTdataReceived(data):
-    logging.debug( 'UART received: ' + str( data ) )
-    global encoderTimeoutTask
+    global encoderTimeoutTask    
+    bts = []
+    for b in data:
+        bts.append(b)
+    logging.debug( 'UART received: ' + str(bts) )
+    if curEncoder == -1 or not encoderTimeoutTask:
+        return
     ed = encData[encoders[curEncoder]]
-    for byte in data:
-        if byte >= 128:
-            ed['hi'] = ( byte - 128 ) << 5
-        else:
-            ed['lo'] = byte - 64
-    if ed['lo'] != -1 and ed['hi'] != -1:
+    if len(data) > 1 and data[0] >= 128 and data[1] >= 64 and data[1] < 128:
+        ed['hi'] = ( data[0] - 128 ) << 5
+        ed['lo'] = data[1] - 64
+        encoderTimeoutTask.cancel()
+        logging.debug( str( curEncoder ) + ': timeout cancelled' )
+        encoderTimeoutTask = None
         if ed['grey'] != ed['lo'] + ed['hi'] or ed['val'] == -1:
             ed['grey'] = ed['lo'] + ed['hi']
             val = ed['grey']
@@ -134,11 +140,11 @@ def UARTdataReceived(data):
                 val = val ^ mask
                 mask = mask >> 1
             logging.info( str( encoders[curEncoder] ) + ': ' + str(val) )
-            setEncoderValue( encoders[curEncoder], val )
-        if encoderTimeoutTask:
-            encoderTimeoutTask.cancel()
-            encoderTimeoutTask = None
-            nextEncoder()
+            if val < 1024:
+                setEncoderValue( encoders[curEncoder], val )
+        else:
+            ed['updated'] = True
+        nextEncoder()
 
 def controllerConnected( state ):
     global encoderTimeoutTask
@@ -160,21 +166,35 @@ def nextEncoder():
     queryEncoders()
 
 def onEncoderTimeout():
-    logging.warning( 'answer timeout' )
-    encoderTimeoutTask = None
-    setEncoderValue( encoders[curEncoder], -1 )
+    global encoderTimeoutTask
+    encoderTimeoutTask = None  
+    if curEncoder <= len( encoders ) - 1:
+        if not encData[encoders[curEncoder]]['updated']:
+            logging.warning( str(curEncoder) + ': answer timeout ')
+            setEncoderValue( encoders[curEncoder], -1 )
     nextEncoder()
 
 def queryEncoders():
+    global encoderTimeoutTask
 
+    def switchRec():
+        logging.debug( str( curEncoder ) + ': switch REC' )
+        controller.setLineState( trLine, 0 )
+   
     def sendQuery():
-        global encoderTimeoutTask
+        logging.debug( str( curEncoder ) + ': send query' )
         controller.UARTsend( bytes( [encoders[curEncoder]] ) )
-        loop.call_later( trDelay, lambda: controller.setLineState( trLine, 0 ) )
-        encoderTimeoutTask = loop.call_later( answerTimeout, onEncoderTimeout )
+        loop.call_later( trDelay, switchRec )
 
-    controller.setLineState( trLine, 1 )
-    loop.call_later( trDelay, sendQuery )
+    if not encoderTimeoutTask:
+        encoderTimeoutTask = loop.call_later( answerTimeout, onEncoderTimeout )
+        logging.debug( str( curEncoder ) + ': timeout set' )
+        encData[encoders[curEncoder]]['updated'] = False
+        logging.debug( str( curEncoder ) + ': switch TR' )
+        controller.setLineState( trLine, 1 )
+        loop.call_later( trDelay, sendQuery )
+    else:
+        logging.exception( str(encoderTimeoutTask) )
 
 webApp = web.Application()
 webApp.router.add_get('/aiohttp/ws/encoders', wsHandler )
@@ -191,9 +211,6 @@ if 'port' in conf['web']:
     fp = loop.create_server(handler, port = conf['web']['port'] )
     webSrv = loop.run_until_complete(fp)
     logging.error( 'listening to ' + conf['web']['port'] )
-
-
-wsPingTask = asyncio.ensure_future( wsPing() )
 
 controller = None
 
