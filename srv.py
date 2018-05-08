@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 #coding=utf-8
 
-import asyncio, logging, json
+import asyncio, logging, json, aiohttp
 from aiohttp import web
 from jeromeController import Controller
 
@@ -35,8 +35,8 @@ async def wsHandler(request):
         if msg.type == aiohttp.WSMsgType.TEXT:
             if msg.data == 'close':
                 await ws.close()
-            if msg.data == 'ping':
-                await ws.send_str( 'pong' )
+            if msg.data == '__ping__':
+                await ws.send_str( '__pong__' )
         elif msg.type == aiohttp.WSMsgType.ERROR:
             logging.error('ws connection closed with exception %s' %
                   ws.exception())
