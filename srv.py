@@ -36,7 +36,10 @@ async def wsHandler(request):
             if msg.data == 'close':
                 await ws.close()
             if msg.data == '__ping__':
-                await ws.send_str( '__pong__' )
+                if ws in wsConnections:
+                    await ws.send_str( '__pong__' )
+                else:
+                    await ws.close()
         elif msg.type == aiohttp.WSMsgType.ERROR:
             logging.error('ws connection closed with exception %s' %
                   ws.exception())
@@ -85,6 +88,7 @@ async def wsSend( ws, data ):
             await ws.send_json( data )
             if ws.exception():
                 logging.error( str( ws.exception() ) )
+                await ws.close()
                 wsConnections.remove( ws )
         except:
             logging.exception( 'ws send error' )
@@ -170,7 +174,7 @@ def onEncoderTimeout():
     encoderTimeoutTask = None  
     if curEncoder <= len( encoders ) - 1:
         if not encData[encoders[curEncoder]]['updated']:
-            logging.warning( str(curEncoder) + ': answer timeout ')
+            logging.warning( str(encoders[curEncoder]) + ': answer timeout ')
             setEncoderValue( encoders[curEncoder], -1 )
     nextEncoder()
 
